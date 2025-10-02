@@ -2,7 +2,7 @@
 """
 Raspberry Pi - Water Quality MQTT Publisher
 - Reads turbidity data from Arduino via serial
-- Reads light/spectral sensor directly connected to Pi
+- Reads spectral sensor data from SparkFun RedBoard via serial
 - Publishes combined data to MQTT broker
 """
 
@@ -15,12 +15,8 @@ import sys
 
 # Serial Configuration
 ARDUINO_PORT = '/dev/ttyUSB0'  # Arduino with turbidity sensor
+SPARKFUN_PORT = '/dev/ttyUSB1'  # SparkFun RedBoard with spectral sensor
 BAUD_RATE = 9600
-
-# Light/Spectral Sensor Configuration (connected directly to Pi)
-# If using I2C sensor (like TSL2561), adjust accordingly
-# For this example, we'll use a simple ADC approach
-USE_ADC = True  # Set to True if using MCP3008 or similar ADC
 
 # MQTT Configuration
 MQTT_BROKER = "192.168.1.103"  # MQTT broker IP
@@ -34,53 +30,35 @@ PUBLISH_INTERVAL = 10  # seconds
 class WaterQualityPublisher:
     def __init__(self):
         self.turbidity = None
-        self.light_intensity = None
+        self.spectrum_sensor = None
         
-        # Initialize serial connection to Arduino
+        # Initialize serial connections to both boards
         self.setup_serial()
-        
-        # Initialize light sensor
-        self.setup_light_sensor()
         
         # Initialize MQTT client
         self.setup_mqtt()
     
     def setup_serial(self):
-        """Connect to Arduino"""
+        """Connect to Arduino and SparkFun RedBoard"""
+        # Connect to Arduino (Turbidity Sensor)
         try:
-            self.ser = serial.Serial(ARDUINO_PORT, BAUD_RATE, timeout=2)
+            self.arduino_ser = serial.Serial(ARDUINO_PORT, BAUD_RATE, timeout=2)
             time.sleep(2)  # Wait for Arduino to reset
             print(f"✓ Connected to Arduino on {ARDUINO_PORT}")
         except serial.SerialException as e:
             print(f"✗ Error connecting to Arduino: {e}")
             sys.exit(1)
+        
+        # Connect to SparkFun RedBoard (Spectral Sensor)
+        try:
+            self.sparkfun_ser = serial.Serial(SPARKFUN_PORT, BAUD_RATE, timeout=2)
+            time.sleep(2)  # Wait for SparkFun to reset
+            print(f"✓ Connected to SparkFun RedBoard on {SPARKFUN_PORT}")
+        except serial.SerialException as e:
+            print(f"✗ Error connecting to SparkFun RedBoard: {e}")
+            sys.exit(1)
     
-    def setup_light_sensor(self):
-        """Initialize light/spectral sensor"""
-        if USE_ADC:
-            try:
-                # Using MCP3008 ADC with SPI
-                import spidev
-                self.spi = spidev.SpiDev()
-                self.spi.open(0, 0)  # Bus 0, Device 0
-                self.spi.max_speed_hz = 1350000
-                print("✓ Light sensor (ADC) initialized")
-            except Exception as e:
-                print(f"⚠ Warning: Could not initialize ADC: {e}")
-                print("  Install with: pip3 install spidev")
-                self.spi = None
-        else:
-            # Using I2C sensor (example: TSL2561)
-            try:
-                import board
-                import adafruit_tsl2561
-                i2c = board.I2C()
-                self.light_sensor = adafruit_tsl2561.TSL2561(i2c)
-                print("✓ Light sensor (I2C) initialized")
-            except Exception as e:
-                print(f"⚠ Warning: Could not initialize I2C sensor: {e}")
-                print("  Install with: pip3 install adafruit-circuitpython-tsl2561")
-                self.light_sensor = None
+
     
     def setup_mqtt(self):
         """Initialize MQTT client"""
@@ -110,8 +88,8 @@ class WaterQualityPublisher:
     def read_arduino_turbidity(self):
         """Read turbidity data from Arduino"""
         try:
-            if self.ser.in_waiting > 0:
-                line = self.ser.readline().decode('utf-8').strip()
+            if self.arduino_ser.in_waiting > 0:
+                line = self.arduino_ser.readline().decode('utf-8').strip()
                 # Expected format: {"turbidity":2.5}
                 if line.startswith('{'):
                     data = json.loads(line)
@@ -122,63 +100,40 @@ class WaterQualityPublisher:
             print(f"Error reading Arduino: {e}")
         return False
     
-    def read_light_sensor_adc(self):
-        """Read light sensor via ADC (MCP3008)"""
-        if not self.spi:
-            return None
-        
+    def read_sparkfun_spectrum(self):
+        """Read spectral sensor data from SparkFun RedBoard"""
         try:
-            # Read from channel 0 of MCP3008
-            channel = 0
-            adc = self.spi.xfer2([1, (8 + channel) << 4, 0])
-            data = ((adc[1] & 3) << 8) + adc[2]
-            
-            # Convert to light intensity (0-1023 range)
-            # Adjust conversion based on your sensor
-            voltage = data * 3.3 / 1023.0
-            
-            # For photoresistor with 10K pulldown
-            if voltage > 0:
-                resistance = (3.3 - voltage) * 10000.0 / voltage
-                light_intensity = 500000.0 / resistance
-            else:
-                light_intensity = 0
-            
-            return light_intensity
-        except Exception as e:
-            print(f"Error reading ADC: {e}")
-            return None
+            if self.sparkfun_ser.in_waiting > 0:
+                line = self.sparkfun_ser.readline().decode('utf-8').strip()
+                # Expected format: {"spectrum":123.45} or {"spectral":123.45}
+                if line.startswith('{'):
+                    data = json.loads(line)
+                    # Check for various possible key names
+                    if 'spectrum' in data:
+                        self.spectrum_sensor = data['spectrum']
+                        return True
+                    elif 'spectral' in data:
+                        self.spectrum_sensor = data['spectral']
+                        return True
+                    elif 'spectrum_sensor' in data:
+                        self.spectrum_sensor = data['spectrum_sensor']
+                        return True
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            print(f"Error reading SparkFun: {e}")
+        return False
     
-    def read_light_sensor_i2c(self):
-        """Read light sensor via I2C (TSL2561)"""
-        if not hasattr(self, 'light_sensor') or not self.light_sensor:
-            return None
-        
-        try:
-            # Read lux value
-            lux = self.light_sensor.lux
-            return lux if lux is not None else 0
-        except Exception as e:
-            print(f"Error reading I2C sensor: {e}")
-            return None
-    
-    def read_light_sensor(self):
-        """Read light/spectral sensor"""
-        if USE_ADC:
-            self.light_intensity = self.read_light_sensor_adc()
-        else:
-            self.light_intensity = self.read_light_sensor_i2c()
+
     
     def publish_data(self):
         """Publish sensor data to MQTT broker"""
-        if self.turbidity is None or self.light_intensity is None:
+        if self.turbidity is None or self.spectrum_sensor is None:
             print("⏳ Waiting for sensor data...")
             return
         
         payload = {
             "timestamp": datetime.now().isoformat(),
-            "turbidity": round(self.turbidity, 2),
-            "light_intensity": round(self.light_intensity, 2),
+            "turbidity_sensor": round(self.turbidity, 2),
+            "spectrum_sensor": round(self.spectrum_sensor, 2),
             "location": "raspberry_pi_1"
         }
         
@@ -191,7 +146,7 @@ class WaterQualityPublisher:
             )
             
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                print(f"✓ Published: Turbidity={self.turbidity:.2f} NTU, Light={self.light_intensity:.2f}")
+                print(f"✓ Published: Turbidity={self.turbidity:.2f} NTU, Spectrum={self.spectrum_sensor:.2f}")
             else:
                 print(f"✗ Publish failed: {result.rc}")
         except Exception as e:
@@ -210,13 +165,13 @@ class WaterQualityPublisher:
         
         try:
             while True:
-                # Continuously read from Arduino
+                # Continuously read from both Arduino and SparkFun
                 self.read_arduino_turbidity()
+                self.read_sparkfun_spectrum()
                 
-                # Read light sensor
+                # Publish data at specified interval
                 current_time = time.time()
                 if current_time - last_publish >= PUBLISH_INTERVAL:
-                    self.read_light_sensor()
                     self.publish_data()
                     last_publish = current_time
                 
@@ -226,15 +181,12 @@ class WaterQualityPublisher:
             print("\n\nShutting down publisher...")
             self.mqtt_client.loop_stop()
             self.mqtt_client.disconnect()
-            if self.ser:
-                self.ser.close()
+            if self.arduino_ser:
+                self.arduino_ser.close()
+            if self.sparkfun_ser:
+                self.sparkfun_ser.close()
             print("Goodbye!")
 
 if __name__ == "__main__":
-    # Check for alternative simple mode (simulated sensor for testing)
-    if len(sys.argv) > 1 and sys.argv[1] == "--simulate":
-        print("Running in simulation mode...")
-        USE_ADC = False
-        
     publisher = WaterQualityPublisher()
     publisher.run()
