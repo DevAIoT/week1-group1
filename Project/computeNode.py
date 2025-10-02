@@ -42,7 +42,7 @@ class WaterQualitySubscriber:
     
     def setup_mqtt(self):
         """Initialize MQTT client"""
-        self.mqtt_client = mqtt.Client(MQTT_CLIENT_ID)
+        self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, MQTT_CLIENT_ID)
         self.mqtt_client.on_connect = self.on_connect
         self.mqtt_client.on_message = self.on_message
         self.mqtt_client.on_disconnect = self.on_disconnect
