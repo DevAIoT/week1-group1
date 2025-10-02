@@ -49,7 +49,7 @@ class WaterQualityPublisher:
     
     def setup_mqtt(self):
         """Initialize MQTT client"""
-        self.mqtt_client = mqtt.Client(MQTT_CLIENT_ID)
+        self.mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self.mqtt_client.on_connect = self.on_mqtt_connect
         self.mqtt_client.on_disconnect = self.on_mqtt_disconnect
         
@@ -61,14 +61,14 @@ class WaterQualityPublisher:
             print(f"✗ Error connecting to MQTT broker: {e}")
             sys.exit(1)
     
-    def on_mqtt_connect(self, client, userdata, flags, rc):
+    def on_mqtt_connect(self, client, userdata, flags, rc, properties=None):
         """Callback when connected to MQTT broker"""
         if rc == 0:
             print("✓ Connected to MQTT broker")
         else:
             print(f"✗ Failed to connect to MQTT broker, code: {rc}")
     
-    def on_mqtt_disconnect(self, client, userdata, rc):
+    def on_mqtt_disconnect(self, client, userdata, rc, properties=None):
         """Callback when disconnected from MQTT broker"""
         print("⚠ Disconnected from MQTT broker")
     
