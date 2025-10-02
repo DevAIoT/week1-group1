@@ -1,311 +1,385 @@
 # Water Quality Monitoring System
 
+Real-time water quality monitoring with IoT sensors and live dashboard visualization.
+
 ## System Architecture
 
 ```
-Arduino (Turbidity) → Raspberry Pi (Publisher) → MQTT Broker
-                            ↓
-                    Light Sensor (on Pi)
-                            ↓
-                      [MQTT Broker]
-                            ↓
-                   Compute Node (Subscriber) → Email Alerts
+Arduino (Turbidity) → Raspberry Pi (Publisher) → MQTT Broker (192.168.1.103:1883)
+                            ↓                            ↓
+                    Light Sensor (on Pi)        WebSocket Bridge Server
+                                                         ↓
+                                                  Next.js Dashboard
+                                                  (Live Visualization)
 ```
 
 ## Components
 
-1. **Arduino**: Reads turbidity sensor, sends to Pi via serial
-2. **Raspberry Pi**: Reads Arduino + light sensor, publishes to MQTT
-3. **Compute Node**: Subscribes to MQTT, sends email alerts
+1. **Arduino**: Reads turbidity sensor, sends data to Pi via serial
+2. **Raspberry Pi**: Reads Arduino data + light sensor, publishes to MQTT broker
+3. **MQTT Broker**: Central message broker at `192.168.1.103:1883`
+4. **WebSocket Bridge**: Python FastAPI server that bridges MQTT to WebSocket
+5. **Dashboard**: Next.js web application with real-time data visualization
 
 ---
 
-## Installation Steps
+## Quick Start Guide
 
-### 1. Setup MQTT Broker (Mosquitto)
+### Prerequisites
+- MQTT Broker running at `192.168.1.103:1883` (Mosquitto)
+- Python 3.8+ with pip
+- Node.js 18+ with npm
+- Arduino with turbidity sensor
+- Raspberry Pi with light sensor
 
-**On any machine (can be the Pi or compute node):**
+### 1. Setup WebSocket Bridge Server
+
+The bridge server connects to the MQTT broker and exposes WebSocket endpoint for the dashboard.
 
 ```bash
-# Install Mosquitto
-sudo apt-get update
-sudo apt-get install mosquitto mosquitto-clients
+cd Project
 
-# Start broker
-sudo systemctl start mosquitto
-sudo systemctl enable mosquitto
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Test broker
-mosquitto_sub -h localhost -t test &
-mosquitto_pub -h localhost -t test -m "Hello MQTT"
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment (optional)
+export MQTT_BROKER=192.168.1.103
+export MQTT_PORT=1883
+export MQTT_TOPIC=group1/water_quality
+
+# Run the bridge server
+python websocket_bridge.py
 ```
 
-**Find broker IP:**
+The bridge will be available at `http://localhost:8000` with WebSocket at `ws://localhost:8000/ws`
+
+### 2. Setup Dashboard
+
 ```bash
-hostname -I
+cd dashboard
+
+# Install dependencies
+npm install
+
+# Configure environment
+# Edit .env.local to set:
+# NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+
+# Run development server
+npm run dev
 ```
 
----
+Open http://localhost:3000 in your browser to see the live dashboard.
 
-### 2. Setup Arduino
+### 3. Setup Raspberry Pi Publisher
 
-1. Upload `turbidity.ino` to your Arduino
-2. Connect turbidity sensor to pin A0
-3. Connect Arduino to Raspberry Pi via USB
-
----
-
-### 3. Setup Raspberry Pi (Publisher)
-
-**Install dependencies:**
 ```bash
-sudo apt-get install python3-pip
+# On Raspberry Pi
 pip3 install pyserial paho-mqtt
 
-# If using ADC (MCP3008):
-pip3 install spidev
+# Edit configuration in raspberrypi.py
+nano raspberrypi.py
 
-# Enable SPI
-sudo raspi-config
-# → Interface Options → SPI → Enable
-
-# If using I2C sensor (TSL2561):
-pip3 install adafruit-circuitpython-tsl2561
-
-# Enable I2C
-sudo raspi-config
-# → Interface Options → I2C → Enable
-```
-
-**Hardware connections:**
-- Arduino USB → Raspberry Pi USB port
-- Light sensor:
-  - **Option A - ADC (MCP3008):** Connect via SPI
-  - **Option B - I2C sensor:** Connect via I2C pins
-
-**Configure and run:**
-```bash
-# Edit the Python script
-nano raspberry_pi_publisher.py
-
-# Update these values:
+# Update:
 # - ARDUINO_PORT (check with: ls /dev/ttyUSB* /dev/ttyACM*)
-# - MQTT_BROKER (IP address of broker)
-# - USE_ADC (True for MCP3008, False for I2C)
+# - MQTT_BROKER (192.168.1.103)
 
 # Run publisher
-python3 raspberry_pi_publisher.py
-```
-
----
-
-### 4. Setup Compute Node (Subscriber)
-
-**On your local machine (laptop/desktop/another Pi):**
-
-```bash
-# Install dependencies
-pip3 install paho-mqtt requests
-
-# Get Resend API key
-# 1. Sign up at https://resend.com
-# 2. Create API key in dashboard
-# 3. Copy key
-
-# Configure script
-nano compute_node_subscriber.py
-
-# Update these values:
-# - MQTT_BROKER (IP of your broker)
-# - RESEND_API_KEY (from resend.com)
-# - SENDER_EMAIL (use onboarding@resend.dev for testing)
-# - RECIPIENT_EMAIL (your email)
-# - Thresholds if needed
-
-# Run subscriber
-python3 compute_node_subscriber.py
+python3 raspberrypi.py
 ```
 
 ---
 
 ## Testing the System
 
-### Test MQTT Connection
-```bash
-# Subscribe to the topic
-mosquitto_sub -h <BROKER_IP> -t water/quality -v
+### 1. Test WebSocket Bridge
+Visit http://localhost:8000 to see bridge status and active connections.
 
-# You should see messages like:
-# water/quality {"timestamp":"2025-10-02T10:30:00","turbidity":2.5,"light_intensity":450.0,"location":"raspberry_pi_1"}
+### 2. Simulate Sensor Data
+```bash
+cd Project
+python simulate_sensor_data.py
+```
+This publishes test data to the MQTT broker.
+
+### 3. Monitor MQTT Traffic
+```bash
+mosquitto_sub -h 192.168.1.103 -t group1/water_quality -v
 ```
 
-### Test with Manual Publish
-```bash
-mosquitto_pub -h <BROKER_IP> -t water/quality -m '{"turbidity":10.5,"light_intensity":30.0}'
+You should see messages like:
+```json
+{
+  "timestamp": "2025-10-02T10:30:00",
+  "turbidity": 2.5,
+  "light_intensity": 450.0,
+  "location": "raspberry_pi_1"
+}
 ```
-This should trigger an email alert!
 
 ---
 
-## Running as Services (Auto-start on boot)
+## Project Structure
 
-### Raspberry Pi Publisher Service
+```
+week1-group1/
+├── Project/
+│   ├── websocket_bridge.py      # WebSocket bridge server (FastAPI)
+│   ├── raspberrypi.py            # Raspberry Pi publisher
+│   ├── simulate_sensor_data.py  # Test data simulator
+│   ├── requirements.txt          # Python dependencies
+│   └── venv/                     # Virtual environment
+├── dashboard/
+│   ├── src/
+│   │   ├── app/                  # Next.js pages
+│   │   ├── components/           # React components
+│   │   │   └── WaterQualityDashboard.tsx
+│   │   ├── hooks/
+│   │   │   └── useMQTTWaterQuality.ts  # WebSocket hook
+│   │   ├── lib/
+│   │   │   └── water-quality-analyzer.ts
+│   │   └── types/
+│   │       └── water-quality.ts
+│   ├── .env.local                # Environment variables
+│   └── package.json
+└── README.md
 
+---
+
+## Configuration Files
+
+### `.env.local` (Dashboard)
 ```bash
-sudo nano /etc/systemd/system/water-publisher.service
+# WebSocket Bridge URL
+NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+
+# MQTT Topic (for reference)
+NEXT_PUBLIC_MQTT_TOPIC=group1/water_quality
 ```
 
-Add:
+### Environment Variables (Bridge Server)
+```bash
+export MQTT_BROKER=192.168.1.103  # MQTT broker IP
+export MQTT_PORT=1883              # MQTT broker port
+export MQTT_TOPIC=group1/water_quality
+export MQTT_CLIENT_ID=websocket_bridge
+```
+
+---
+
+## Dashboard Features
+
+- **Real-time Monitoring**: Live updates via WebSocket
+- **Water Quality Status**: Overall quality score with color-coded indicators
+- **Metrics Display**: 
+  - Turbidity levels (NTU)
+  - Light transmission intensity
+- **Historical Trends**: Line chart showing last 20 readings
+- **Alert System**: Visual alerts for water quality issues
+- **Connection Status**: Shows WebSocket connection state
+
+### Water Quality Thresholds
+
+- **Turbidity**: 
+  - Clean: < 1 NTU
+  - Slightly turbid: 1-5 NTU
+  - Dirty: > 5 NTU
+- **Light Intensity**:
+  - Normal range: 50-800 units
+
+---
+
+## Running as Services (Production)
+
+### WebSocket Bridge Service
+
+```bash
+sudo nano /etc/systemd/system/water-bridge.service
+```
+
 ```ini
 [Unit]
-Description=Water Quality MQTT Publisher
-After=network.target mosquitto.service
-
-[Service]
-ExecStart=/usr/bin/python3 /home/pi/raspberry_pi_publisher.py
-WorkingDirectory=/home/pi
-StandardOutput=inherit
-StandardError=inherit
-Restart=always
-User=pi
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable water-publisher.service
-sudo systemctl start water-publisher.service
-
-# Check status
-sudo systemctl status water-publisher.service
-
-# View logs
-sudo journalctl -u water-publisher.service -f
-```
-
-### Compute Node Subscriber Service
-
-Same process on compute node:
-```bash
-sudo nano /etc/systemd/system/water-subscriber.service
-```
-
-```ini
-[Unit]
-Description=Water Quality MQTT Subscriber
+Description=Water Quality WebSocket Bridge
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/user/compute_node_subscriber.py
-WorkingDirectory=/home/user
-StandardOutput=inherit
-StandardError=inherit
+ExecStart=/path/to/venv/bin/python /path/to/websocket_bridge.py
+WorkingDirectory=/path/to/Project
+Environment="MQTT_BROKER=192.168.1.103"
+Environment="MQTT_PORT=1883"
+Environment="MQTT_TOPIC=group1/water_quality"
 Restart=always
-User=user
+User=your-user
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+Enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable water-bridge.service
+sudo systemctl start water-bridge.service
+sudo systemctl status water-bridge.service
+```
+
+### Dashboard Production Build
+
+```bash
+cd dashboard
+npm run build
+npm start  # Or use PM2/systemd
+```
+
 ---
 
-## Monitoring & Troubleshooting
+## Troubleshooting
 
-### Check MQTT broker status
+### WebSocket Bridge Issues
+
+**"Error connecting to MQTT broker"**
+- Verify MQTT broker is running at `192.168.1.103:1883`
+- Check network connectivity: `ping 192.168.1.103`
+- Verify broker allows connections: `mosquitto_sub -h 192.168.1.103 -t test`
+
+**Bridge server won't start**
 ```bash
-sudo systemctl status mosquitto
+# Check if port 8000 is in use
+lsof -i :8000
+
+# Kill process if needed
+kill -9 <PID>
 ```
 
-### Monitor MQTT traffic
-```bash
-mosquitto_sub -h <BROKER_IP> -t '#' -v
-```
+### Dashboard Issues
 
-### Check publisher logs
-```bash
-# If running as service
-sudo journalctl -u water-publisher.service -f
+**"Disconnected" status**
+- Ensure WebSocket bridge is running: `curl http://localhost:8000`
+- Check `.env.local` has correct `NEXT_PUBLIC_WS_URL`
+- Restart Next.js dev server after changing `.env.local`
 
-# If running manually, check terminal output
-```
+**No data showing**
+- Verify Raspberry Pi publisher is running and sending data
+- Monitor MQTT: `mosquitto_sub -h 192.168.1.103 -t group1/water_quality -v`
+- Check bridge server logs for incoming messages
 
-### Common Issues
+### Raspberry Pi Publisher Issues
 
-**"Connection refused" on MQTT:**
-- Check broker is running: `sudo systemctl status mosquitto`
-- Check firewall: `sudo ufw allow 1883`
-- Verify broker IP is correct
+**"Connection refused" on MQTT**
+- Check broker IP is correct in `raspberrypi.py`
+- Verify broker is accessible from Pi network
 
-**No data from Arduino:**
+**No data from Arduino**
 - Check serial port: `ls /dev/ttyUSB* /dev/ttyACM*`
-- Test serial: `cat /dev/ttyUSB0` (should see JSON data)
-- Check Arduino Serial Monitor first
+- Test serial connection: `cat /dev/ttyUSB0`
+- Verify Arduino is running and connected
 
-**Light sensor not working:**
-- Verify connections
-- Check if SPI/I2C is enabled
-- Test with simple read script
+### Network Issues
 
-**Email not sending:**
-- Verify Resend API key
-- Check API key permissions
-- Test with curl:
+**Components on different networks**
+- All components must be on same network or have proper routing
+- MQTT broker at `192.168.1.103` must be accessible
+- Check firewalls aren't blocking port 1883 or 8000
+
+---
+
+## API Endpoints (WebSocket Bridge)
+
+### GET `/`
+Health check and server status
+```json
+{
+  "status": "running",
+  "service": "Water Quality WebSocket Bridge",
+  "mqtt_broker": "192.168.1.103:1883",
+  "mqtt_topic": "group1/water_quality",
+  "active_connections": 1
+}
+```
+
+### WebSocket `/ws`
+WebSocket endpoint for real-time data streaming. Messages are in JSON format:
+```json
+{
+  "timestamp": "2025-10-02T10:30:00",
+  "turbidity": 2.5,
+  "light_intensity": 450.0,
+  "location": "raspberry_pi_1"
+}
+```
+
+---
+
+## Data Flow
+
+1. **Arduino** → Reads turbidity sensor → Sends JSON via serial (5s intervals)
+2. **Raspberry Pi** → Reads serial + light sensor → Publishes to MQTT (10s intervals)
+3. **MQTT Broker** → Receives messages on `group1/water_quality` topic
+4. **WebSocket Bridge** → Subscribes to MQTT → Broadcasts to WebSocket clients
+5. **Dashboard** → Connects via WebSocket → Displays real-time data & analysis
+
+---
+
+## Technology Stack
+
+### Backend
+- **Python 3.8+**
+- **FastAPI** - Modern web framework for WebSocket bridge
+- **Paho MQTT** - MQTT client library
+- **Uvicorn** - ASGI server
+
+### Frontend
+- **Next.js 15** - React framework
+- **TypeScript** - Type-safe JavaScript
+- **Tailwind CSS** - Utility-first CSS
+- **Recharts** - Data visualization
+- **Lucide React** - Icon library
+
+### Hardware
+- Arduino (turbidity sensor)
+- Raspberry Pi (light sensor + serial reader)
+- MQTT Broker (Mosquitto)
+
+---
+
+## Development Tips
+
+### Hot Reload Dashboard
+The Next.js development server supports hot reload. Changes to components will reflect immediately.
+
+### Debug WebSocket Connection
+```javascript
+// Open browser console on dashboard page
+// WebSocket connection logs will appear
+```
+
+### Monitor All System Components
 ```bash
-curl -X POST 'https://api.resend.com/emails' \
-  -H 'Authorization: Bearer YOUR_KEY' \
-  -H 'Content-Type: application/json' \
-  -d '{"from":"onboarding@resend.dev","to":"you@example.com","subject":"Test","text":"Test"}'
+# Terminal 1: Bridge server
+cd Project && ./venv/bin/python websocket_bridge.py
+
+# Terminal 2: Dashboard
+cd dashboard && npm run dev
+
+# Terminal 3: MQTT monitor
+mosquitto_sub -h 192.168.1.103 -t group1/water_quality -v
+
+# Terminal 4: Simulate data (for testing)
+cd Project && python simulate_sensor_data.py
 ```
 
 ---
 
-## Calibration
+## License
 
-### Turbidity Sensor
-1. Test with clean distilled water (should read ~0 NTU)
-2. Test with known turbid water samples
-3. Adjust formula in Arduino code if needed
-
-### Light Sensor
-1. Test in clean water with consistent light source
-2. Note baseline reading
-3. Adjust `LIGHT_INTENSITY_MIN` and `LIGHT_INTENSITY_MAX` in compute node
+This project is part of SMU FYP Y3S1 - Week 1 Group 1.
 
 ---
 
-## Data Flow Summary
+## Contributors
 
-1. **Arduino** reads turbidity every 5 seconds → sends JSON via serial
-2. **Raspberry Pi** reads serial + light sensor → publishes to MQTT every 10 seconds
-3. **MQTT Broker** receives and distributes messages
-4. **Compute Node** subscribes → analyzes data → sends email if dirty water detected
-
----
-
-## System Diagram
-
-```
-┌─────────────┐
-│   Arduino   │
-│  Turbidity  │
-└──────┬──────┘
-       │ USB/Serial
-       ↓
-┌─────────────────────┐       ┌──────────────┐
-│   Raspberry Pi      │       │ MQTT Broker  │
-│  - Serial Reader    │◄─────►│  (Mosquitto) │
-│  - Light Sensor     │ WiFi  │              │
-│  - MQTT Publisher   │       └──────┬───────┘
-└─────────────────────┘              │
-                                     │ WiFi/Network
-                                     ↓
-                              ┌──────────────┐
-                              │ Compute Node │
-                              │ - Subscriber │
-                              │ - Analyzer   │
-                              │ - Email Alert│
-                              └──────────────┘
-```
+DevAIoT Team - Week 1 Group 1
