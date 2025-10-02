@@ -49,7 +49,7 @@ hostname -I
 
 ### 2. Setup Arduino
 
-1. Upload `arduino_turbidity.ino` to your Arduino
+1. Upload `turbidity.ino` to your Arduino
 2. Connect turbidity sensor to pin A0
 3. Connect Arduino to Raspberry Pi via USB
 
