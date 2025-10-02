@@ -29,8 +29,8 @@ PUBLISH_INTERVAL = 10  # seconds
 
 class WaterQualityPublisher:
     def __init__(self):
-        self.turbidity = None
-        self.spectrum_sensor = None
+        self.turbidity_readings = []  # Store multiple turbidity readings for averaging
+        self.spectrum_readings = []  # Store multiple spectrum readings for averaging
         
         # Initialize serial connections to both boards
         self.setup_serial()
@@ -86,37 +86,46 @@ class WaterQualityPublisher:
         print("⚠ Disconnected from MQTT broker")
     
     def read_arduino_turbidity(self):
-        """Read turbidity data from Arduino"""
+        """Read turbidity data from Arduino and accumulate readings"""
         try:
             if self.arduino_ser.in_waiting > 0:
                 line = self.arduino_ser.readline().decode('utf-8').strip()
-                # Expected format: {"turbidity":2.5}
+                # Expected format: {"raw":512,"voltage":2.5,"turbidity":100.5}
                 if line.startswith('{'):
                     data = json.loads(line)
+                    
+                    # Check if this is status message
+                    if 'status' in data:
+                        print(f"ℹ️  Arduino: {data}")
+                        return False
+                    
+                    # Check if we have turbidity data
                     if 'turbidity' in data:
-                        self.turbidity = data['turbidity']
+                        self.turbidity_readings.append(data)
+                        print(f"💧 Turbidity Reading #{len(self.turbidity_readings)}: {data['turbidity']:.2f} NTU (V={data['voltage']:.2f})")
                         return True
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"Error reading Arduino: {e}")
         return False
     
     def read_sparkfun_spectrum(self):
-        """Read spectral sensor data from SparkFun RedBoard"""
+        """Read spectral sensor data from SparkFun RedBoard and accumulate readings"""
         try:
             if self.sparkfun_ser.in_waiting > 0:
                 line = self.sparkfun_ser.readline().decode('utf-8').strip()
-                # Expected format: {"spectrum":123.45} or {"spectral":123.45}
+                # Expected format: {"A":123.45,"B":234.56,...,"spectrum":180.23}
                 if line.startswith('{'):
                     data = json.loads(line)
-                    # Check for various possible key names
-                    if 'spectrum' in data:
-                        self.spectrum_sensor = data['spectrum']
-                        return True
-                    elif 'spectral' in data:
-                        self.spectrum_sensor = data['spectral']
-                        return True
-                    elif 'spectrum_sensor' in data:
-                        self.spectrum_sensor = data['spectrum_sensor']
+                    
+                    # Check if this is status/error message
+                    if 'status' in data or 'error' in data:
+                        print(f"ℹ️  SparkFun: {data}")
+                        return False
+                    
+                    # Check if we have spectral data with channels
+                    if 'A' in data and 'spectrum' in data:
+                        self.spectrum_readings.append(data)
+                        print(f"📊 Spectrum Reading #{len(self.spectrum_readings)}: Avg={data['spectrum']:.2f}")
                         return True
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"Error reading SparkFun: {e}")
@@ -126,16 +135,64 @@ class WaterQualityPublisher:
     
     def publish_data(self):
         """Publish sensor data to MQTT broker"""
-        if self.turbidity is None or self.spectrum_sensor is None:
+        # Check if we have at least one sensor with data
+        if not self.turbidity_readings and not self.spectrum_readings:
             print("⏳ Waiting for sensor data...")
             return
         
         payload = {
             "timestamp": datetime.now().isoformat(),
-            "turbidity_sensor": round(self.turbidity, 2),
-            "spectrum_sensor": round(self.spectrum_sensor, 2),
             "location": "raspberry_pi_1"
         }
+        
+        status_msg = []
+        
+        # Add turbidity data if available
+        if self.turbidity_readings:
+            num_turbidity = len(self.turbidity_readings)
+            avg_turbidity = sum(r['turbidity'] for r in self.turbidity_readings) / num_turbidity
+            avg_voltage = sum(r['voltage'] for r in self
+                              .turbidity_readings) / num_turbidity
+            
+            payload["turbidity"] = {
+                "turbidity_ntu": round(avg_turbidity, 2),
+                "voltage": round(avg_voltage, 2),
+                "readings_count": num_turbidity
+            }
+            status_msg.append(f"Turbidity={avg_turbidity:.2f} NTU ({num_turbidity} readings)")
+        else:
+            payload["turbidity"] = None
+            status_msg.append("Turbidity=N/A")
+        
+        # Add spectrum data if available
+        if self.spectrum_readings:
+            num_spectrum = len(self.spectrum_readings)
+            avg_channels = {
+                'A': sum(r['A'] for r in self.spectrum_readings) / num_spectrum,
+                'B': sum(r['B'] for r in self.spectrum_readings) / num_spectrum,
+                'C': sum(r['C'] for r in self.spectrum_readings) / num_spectrum,
+                'D': sum(r['D'] for r in self.spectrum_readings) / num_spectrum,
+                'E': sum(r['E'] for r in self.spectrum_readings) / num_spectrum,
+                'F': sum(r['F'] for r in self.spectrum_readings) / num_spectrum
+            }
+            avg_spectrum = sum(r['spectrum'] for r in self.spectrum_readings) / num_spectrum
+            
+            payload["spectrum_sensor"] = {
+                "channels": {
+                    "A": round(avg_channels['A'], 2),
+                    "B": round(avg_channels['B'], 2),
+                    "C": round(avg_channels['C'], 2),
+                    "D": round(avg_channels['D'], 2),
+                    "E": round(avg_channels['E'], 2),
+                    "F": round(avg_channels['F'], 2)
+                },
+                "average": round(avg_spectrum, 2),
+                "readings_count": num_spectrum
+            }
+            status_msg.append(f"Spectrum={avg_spectrum:.2f} ({num_spectrum} readings)")
+        else:
+            payload["spectrum_sensor"] = None
+            status_msg.append("Spectrum=N/A")
         
         try:
             result = self.mqtt_client.publish(
@@ -146,7 +203,10 @@ class WaterQualityPublisher:
             )
             
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                print(f"✓ Published: Turbidity={self.turbidity:.2f} NTU, Spectrum={self.spectrum_sensor:.2f}")
+                print(f"✓ Published: {', '.join(status_msg)}")
+                # Clear readings after successful publish
+                self.turbidity_readings = []
+                self.spectrum_readings = []
             else:
                 print(f"✗ Publish failed: {result.rc}")
         except Exception as e:
