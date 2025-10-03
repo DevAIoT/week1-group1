@@ -1,3 +1,165 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+.virtualenv/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Logs and Databases
+*.log
+*.sql
+*.sqlite
+*.db
+water_quality_alerts.json
+*.json.bak
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Arduino
+*.hex
+*.eep
+*.elf
+*.map
+*.sym
+*.lss
+*.o
+*.d
+*.lst
+.build/
+build-*/
+*.ino.cpp
+*.ino.with_bootloader.hex
+*.ino.eep
+*.ino.elf
+
+# Raspberry Pi / Hardware Specific
+*.img
+*.img.gz
+*.iso
+nohup.out
+
+# Temporary Files
+*.tmp
+*.bak
+*.swp
+*~.nib
+*.orig
+*.rej
+
+# Testing
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+htmlcov/
+.hypothesis/
+
+# Documentation
+docs/_build/
+.doctrees
+*.rst~
+
+# MQTT/Serial Logs
+mqtt_*.log
+serial_*.log
+sensor_data_*.csv
+
+# Configuration files with sensitive data
+config_local.py
+settings_local.py
+secrets.json
+credentials.json
+*.pem
+*.key
+*.crt
+
+# Backup files
+*.backup
+backup/
+backups/
+
+# Node.js (if any future web interface)
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Compiled source
+*.com
+*.class
+*.dll
+*.exe
+*.out
+*.app
 # macOS
 .DS_Store
 .DS_Store?
