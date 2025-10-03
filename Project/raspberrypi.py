@@ -90,22 +90,47 @@ class WaterQualityPublisher:
         try:
             if self.arduino_ser.in_waiting > 0:
                 line = self.arduino_ser.readline().decode('utf-8').strip()
-                # Expected format: {"raw":512,"voltage":2.5,"turbidity":100.5}
+                
+                if not line:
+                    return False
+                
+                # Try to parse JSON format: {"raw":512,"voltage":2.5,"turbidity":100.5}
                 if line.startswith('{'):
-                    data = json.loads(line)
+                    try:
+                        data = json.loads(line)
+                        
+                        # Check if this is status message
+                        if 'status' in data:
+                            print(f"ℹ️  Arduino: {data}")
+                            return False
+                        
+                        # Check if we have turbidity data
+                        if 'turbidity' in data:
+                            self.turbidity_readings.append(data)
+                            print(f"💧 Turbidity Reading #{len(self.turbidity_readings)}: {data['turbidity']:.2f} NTU (V={data['voltage']:.2f})")
+                            return True
+                    except json.JSONDecodeError:
+                        pass  # Fall through to try parsing as plain voltage
+                
+                # Try to parse as plain voltage value: "2.500"
+                try:
+                    voltage = float(line)
                     
-                    # Check if this is status message
-                    if 'status' in data:
-                        print(f"ℹ️  Arduino: {data}")
-                        return False
+                    data = {
+                        'voltage': voltage
+                    }
                     
-                    # Check if we have turbidity data
-                    if 'turbidity' in data:
-                        self.turbidity_readings.append(data)
-                        print(f"💧 Turbidity Reading #{len(self.turbidity_readings)}: {data['turbidity']:.2f} NTU (V={data['voltage']:.2f})")
-                        return True
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            print(f"Error reading Arduino: {e}")
+                    self.turbidity_readings.append(data)
+                    print(f"💧 Turbidity Voltage Reading #{len(self.turbidity_readings)}: {voltage:.3f}V")
+                    return True
+                    
+                except ValueError:
+                    # Not a valid number, ignore
+                    print(f"🔍 Arduino (ignored): {line}")
+                    return False
+                    
+        except UnicodeDecodeError as e:
+            print(f"Error decoding Arduino data: {e}")
         return False
     
     def read_sparkfun_spectrum(self):
@@ -150,18 +175,16 @@ class WaterQualityPublisher:
         # Add turbidity data if available
         if self.turbidity_readings:
             num_turbidity = len(self.turbidity_readings)
-            avg_turbidity = sum(r['turbidity'] for r in self.turbidity_readings) / num_turbidity
             avg_voltage = sum(r['voltage'] for r in self
                               .turbidity_readings) / num_turbidity
             
-            payload["turbidity"] = {
-                "turbidity_ntu": round(avg_turbidity, 2),
-                "voltage": round(avg_voltage, 2),
+            payload["turbidity_sensor"] = {
+                "voltage": round(avg_voltage, 3),
                 "readings_count": num_turbidity
             }
-            status_msg.append(f"Turbidity={avg_turbidity:.2f} NTU ({num_turbidity} readings)")
+            status_msg.append(f"Turbidity Voltage={avg_voltage:.3f}V ({num_turbidity} readings)")
         else:
-            payload["turbidity"] = None
+            payload["turbidity_sensor"] = None
             status_msg.append("Turbidity=N/A")
         
         # Add spectrum data if available
