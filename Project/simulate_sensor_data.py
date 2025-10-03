@@ -11,7 +11,7 @@ import time
 import sys
 import random
 
-# MQTT Configuration (same as computeNode.py)
+# MQTT Configuration
 MQTT_BROKER = "192.168.1.103"
 MQTT_PORT = 1883
 MQTT_TOPIC = "group1/water_quality"

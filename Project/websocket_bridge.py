@@ -49,6 +49,9 @@ message_history: Deque[Dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
 # Event loop reference for MQTT bridge
 event_loop: Optional[AbstractEventLoop] = None
 
+# MQTT connection status
+mqtt_connected: bool = False
+
 class MQTTBridge:
     def __init__(self):
         self.mqtt_client = None
@@ -70,17 +73,39 @@ class MQTTBridge:
     
     def on_connect(self, client, userdata, flags, reason_code, properties):
         """Callback when connected to MQTT broker"""
+        global mqtt_connected
         if reason_code == 0:
             print(f"✓ Connected to MQTT broker")
             print(f"✓ Subscribing to topic: {MQTT_TOPIC}")
             client.subscribe(MQTT_TOPIC, qos=1)
+            mqtt_connected = True
+            # Broadcast status to all connected clients
+            if event_loop and active_connections:
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_status_update(),
+                    event_loop
+                )
         else:
             print(f"✗ Failed to connect, reason code: {reason_code}")
+            mqtt_connected = False
+            if event_loop and active_connections:
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_status_update(),
+                    event_loop
+                )
     
     def on_disconnect(self, client, userdata, flags, reason_code, properties):
         """Callback when disconnected from MQTT broker"""
+        global mqtt_connected
+        mqtt_connected = False
         if reason_code != 0:
             print("⚠ Unexpected disconnection from MQTT broker")
+        # Broadcast status to all connected clients
+        if event_loop and active_connections:
+            asyncio.run_coroutine_threadsafe(
+                broadcast_status_update(),
+                event_loop
+            )
     
     def on_message(self, client, userdata, msg):
         """Callback when message is received from MQTT"""
@@ -235,6 +260,14 @@ class MQTTBridge:
 # Initialize MQTT bridge
 mqtt_bridge = MQTTBridge()
 
+async def broadcast_status_update():
+    """Broadcast MQTT connection status to all WebSocket clients"""
+    status_message = json.dumps({
+        "type": "status",
+        "mqtt_connected": mqtt_connected
+    })
+    await broadcast_message(status_message)
+
 async def broadcast_message(message: str):
     """Send message to all connected WebSocket clients"""
     disconnected = set()
@@ -280,6 +313,13 @@ async def websocket_endpoint(websocket: WebSocket):
     print(f"✓ New WebSocket client connected. Total: {len(active_connections)}")
     
     try:
+        # Send MQTT connection status first
+        status_payload = {
+            "type": "status",
+            "mqtt_connected": mqtt_connected
+        }
+        await websocket.send_text(json.dumps(status_payload))
+        
         # Send historical buffer first so clients can render immediately
         if message_history:
             history_payload = {

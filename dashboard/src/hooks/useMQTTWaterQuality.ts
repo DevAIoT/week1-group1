@@ -261,6 +261,7 @@ export function useMQTTWaterQuality() {
   const [latestData, setLatestData] = useState<WaterQualityData | null>(null);
   const [historicalData, setHistoricalData] = useState<WaterQualityData[]>([]);
   const [connected, setConnected] = useState(false);
+  const [mqttConnected, setMqttConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -350,6 +351,13 @@ export function useMQTTWaterQuality() {
               | Record<string, unknown>;
 
             if (message && typeof message === 'object' && 'type' in message) {
+              if (message.type === 'status' && typeof message === 'object') {
+                const statusMsg = message as { mqtt_connected?: boolean };
+                if (typeof statusMsg.mqtt_connected === 'boolean') {
+                  setMqttConnected(statusMsg.mqtt_connected);
+                }
+                return;
+              }
               if (message.type === 'history' && Array.isArray(message.data)) {
                 const normalized = (message.data as unknown[])
                   .map(normalizeWaterQualityData)
@@ -404,6 +412,7 @@ export function useMQTTWaterQuality() {
           if (!mounted) return;
           console.log('WebSocket disconnected');
           setConnected(false);
+          setMqttConnected(false);
 
           // Attempt to reconnect after 5 seconds
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -440,5 +449,5 @@ export function useMQTTWaterQuality() {
     };
   }, []);
 
-  return { latestData, historicalData, connected, error };
+  return { latestData, historicalData, connected, mqttConnected, error };
 }

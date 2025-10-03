@@ -8,12 +8,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Droplets, AlertTriangle, CheckCircle2, Wifi, WifiOff, BarChart3 } from 'lucide-react';
 import { useMQTTWaterQuality } from '@/hooks/useMQTTWaterQuality';
 import { analyzeWaterQuality, getStatusColor, getStatusLabel } from '@/lib/water-quality-analyzer';
+import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import type { HistoricalDataPoint } from '@/types/water-quality';
 
 export function WaterQualityDashboard() {
-    const { latestData, historicalData, connected, error } = useMQTTWaterQuality();
+    const { latestData, historicalData, connected, mqttConnected, error } = useMQTTWaterQuality();
 
     const turbidityValue = typeof latestData?.turbidity === 'number' ? latestData.turbidity : null;
     const spectrumAverage = typeof latestData?.spectrum?.average === 'number' ? latestData.spectrum.average : null;
@@ -59,22 +60,43 @@ export function WaterQualityDashboard() {
                         <h1 className="text-xl font-bold tracking-tight">Water Quality Monitor</h1>
                         <p className="text-[11px] text-muted-foreground mt-0.5 font-medium">Real-time environmental analysis</p>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                        {connected ? (
-                            <>
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                            {connected ? (
                                 <Wifi className="h-4 w-4 text-green-500" />
-                                <Badge variant="outline" className="bg-green-500/10 text-green-700 border-green-500/20 text-xs px-2 py-0">
-                                    Connected
-                                </Badge>
-                            </>
-                        ) : (
-                            <>
+                            ) : (
                                 <WifiOff className="h-4 w-4 text-red-500" />
-                                <Badge variant="outline" className="bg-red-500/10 text-red-700 border-red-500/20 text-xs px-2 py-0">
-                                    Disconnected
-                                </Badge>
-                            </>
-                        )}
+                            )}
+                            <Badge
+                                variant="outline"
+                                className={cn(
+                                    "text-xs px-2 py-0",
+                                    connected
+                                        ? "bg-green-500/10 text-green-700 border-green-500/20"
+                                        : "bg-red-500/10 text-red-700 border-red-500/20"
+                                )}
+                            >
+                                WebSocket
+                            </Badge>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            {mqttConnected ? (
+                                <Wifi className="h-4 w-4 text-green-500" />
+                            ) : (
+                                <WifiOff className="h-4 w-4 text-red-500" />
+                            )}
+                            <Badge
+                                variant="outline"
+                                className={cn(
+                                    "text-xs px-2 py-0",
+                                    mqttConnected
+                                        ? "bg-green-500/10 text-green-700 border-green-500/20"
+                                        : "bg-red-500/10 text-red-700 border-red-500/20"
+                                )}
+                            >
+                                MQTT
+                            </Badge>
+                        </div>
                     </div>
                 </div>
 
