@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { SpectrumReading, WaterQualityData } from '@/types/water-quality';
+import type {
+  SpectrumReading,
+  TurbidityReading,
+  WaterQualityData,
+} from '@/types/water-quality';
 
 // WebSocket bridge server URL
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
@@ -56,6 +60,26 @@ function parseSpectrumChannels(raw: unknown): Record<string, number> | null {
   return Object.keys(result).length ? result : null;
 }
 
+function mergeTurbidityReadings(
+  current?: TurbidityReading | null,
+  incoming?: TurbidityReading | null,
+): TurbidityReading | null | undefined {
+  if (!current && !incoming) {
+    return undefined;
+  }
+  if (!current) {
+    return incoming ?? undefined;
+  }
+  if (!incoming) {
+    return current ?? undefined;
+  }
+
+  return {
+    voltage: incoming.voltage ?? current.voltage,
+    ntu: incoming.ntu ?? current.ntu,
+  };
+}
+
 function mergeSpectrumReadings(
   previous?: SpectrumReading | null,
   incoming?: SpectrumReading | null,
@@ -101,7 +125,7 @@ function mergeWaterQualityEntries(
     ...incoming,
     timestamp: mergedTimestamp,
     location: incoming.location !== 'unknown' ? incoming.location : current.location,
-    turbidity: incoming.turbidity ?? current.turbidity,
+    turbidity: mergeTurbidityReadings(current.turbidity, incoming.turbidity) ?? current.turbidity,
     spectrum:
       mergeSpectrumReadings(current.spectrum, incoming.spectrum) ??
       current.spectrum ??
@@ -140,6 +164,52 @@ function normalizeTimestamp(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Extract raw turbidity reading from MQTT payload.
+ * Simply extracts voltage or NTU values without any conversion.
+ */
+function normalizeTurbidityReading(data: Record<string, unknown>): TurbidityReading | null {
+  let voltage: number | undefined;
+  let ntu: number | undefined;
+
+  // Check for pre-structured turbidity object
+  const rawField = data.turbidity;
+  if (rawField && typeof rawField === 'object' && !Array.isArray(rawField)) {
+    const raw = rawField as Record<string, unknown>;
+    voltage = numericOrNull(raw.voltage) ?? undefined;
+    ntu = numericOrNull(raw.ntu) ?? undefined;
+  }
+
+  // Check for turbidity_sensor object (from MQTT payload)
+  const turbiditySensorObj = data.turbidity_sensor ?? data.turbiditySensor;
+  if (turbiditySensorObj && typeof turbiditySensorObj === 'object') {
+    const sensor = turbiditySensorObj as Record<string, unknown>;
+    voltage = voltage ?? numericOrNull(sensor.voltage) ?? undefined;
+    ntu = ntu ?? numericOrNull(sensor.ntu) ?? undefined;
+  }
+
+  // Check for top-level voltage field
+  const payloadVoltage = numericOrNull(
+    data.turbidity_voltage ?? data.turbidityVoltage ?? null,
+  );
+  if (payloadVoltage !== null) {
+    voltage = voltage ?? payloadVoltage;
+  }
+
+  // Check for direct NTU value
+  const directNTU = numericOrNull(data.turbidity);
+  if (directNTU !== null && ntu === undefined) {
+    ntu = directNTU;
+  }
+
+  // Return null if no turbidity data found
+  if (voltage === undefined && ntu === undefined) {
+    return null;
+  }
+
+  return { voltage, ntu };
+}
+
 function normalizeWaterQualityData(raw: unknown): WaterQualityData | null {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -147,7 +217,17 @@ function normalizeWaterQualityData(raw: unknown): WaterQualityData | null {
 
   const data = raw as Record<string, unknown>;
   const timestampValue = data.timestamp ?? data.time;
-  const turbidityValue = data.turbidity;
+  if (!timestampValue) {
+    return null;
+  }
+
+  const timestamp = normalizeTimestamp(timestampValue);
+  if (!timestamp) {
+    return null;
+  }
+
+  const turbidity = normalizeTurbidityReading(data);
+  const pHValue = data.pH ?? data.ph;
   const spectrumObject =
     typeof data.spectrum === 'object' && data.spectrum !== null
       ? (data.spectrum as Record<string, unknown>)
@@ -184,24 +264,20 @@ function normalizeWaterQualityData(raw: unknown): WaterQualityData | null {
           ? (spectrumObject.sensorType as string)
           : undefined;
 
-  if (!timestampValue) {
-    return null;
-  }
-
-  const timestamp = normalizeTimestamp(timestampValue);
-  if (!timestamp) {
-    return null;
-  }
-
-  const turbidity = numericOrNull(turbidityValue);
-
+  const pH = numericOrNull(pHValue);
   const location = typeof data.location === 'string' ? data.location : 'unknown';
 
-  const hasTurbidity = turbidity !== null;
+  const hasTurbidity = Boolean(
+    turbidity && (
+      (turbidity.voltage !== undefined && Number.isFinite(turbidity.voltage)) ||
+      (turbidity.ntu !== undefined && Number.isFinite(turbidity.ntu))
+    ),
+  );
+  const hasPH = pH !== null;
   const hasSpectrum =
     !!spectrumChannels || spectrumAverage !== null || spectrumReadingsCount !== null;
 
-  if (!hasTurbidity && !hasSpectrum) {
+  if (!hasTurbidity && !hasPH && !hasSpectrum) {
     return null;
   }
 
@@ -210,8 +286,12 @@ function normalizeWaterQualityData(raw: unknown): WaterQualityData | null {
     location,
   };
 
-  if (turbidity !== null) {
+  if (turbidity) {
     normalized.turbidity = turbidity;
+  }
+
+  if (pH !== null) {
+    normalized.pH = pH;
   }
 
   if (hasSpectrum) {

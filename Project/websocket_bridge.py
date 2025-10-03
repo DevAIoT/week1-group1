@@ -8,6 +8,7 @@ WebSocket Bridge Server - Water Quality Data
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import paho.mqtt.client as mqtt
 import json
 import asyncio
@@ -24,20 +25,16 @@ MQTT_PORT = int(os.environ.get('MQTT_PORT', 1883))
 MQTT_TOPIC = os.environ.get('MQTT_TOPIC', 'group1/water_quality')
 MQTT_CLIENT_ID = os.environ.get('MQTT_CLIENT_ID', 'websocket_bridge')
 
+# Reconnection configuration
+MQTT_RECONNECT_INTERVAL = int(os.environ.get('MQTT_RECONNECT_INTERVAL', 5))  # seconds
+MQTT_RECONNECT_MAX_ATTEMPTS = int(os.environ.get('MQTT_RECONNECT_MAX_ATTEMPTS', 0))  # 0 = infinite
+
 # History configuration
 HISTORY_LIMIT = int(os.environ.get('HISTORY_LIMIT', 100))
 
-# FastAPI app
-app = FastAPI(title="Water Quality WebSocket Bridge")
+# FastAPI app will be initialized later with lifespan context
 
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your dashboard URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware will be added after app initialization
 
 # Store active WebSocket connections
 active_connections: Set[WebSocket] = set()
@@ -52,9 +49,14 @@ event_loop: Optional[AbstractEventLoop] = None
 # MQTT connection status
 mqtt_connected: bool = False
 
+# Reconnection task reference
+reconnect_task: Optional[asyncio.Task] = None
+
 class MQTTBridge:
     def __init__(self):
         self.mqtt_client = None
+        self.reconnect_attempts = 0
+        self.is_reconnecting = False
         self.setup_mqtt()
     
     def setup_mqtt(self):
@@ -70,6 +72,8 @@ class MQTTBridge:
             self.mqtt_client.loop_start()
         except Exception as e:
             print(f"✗ Error connecting to MQTT broker: {e}")
+            # Start reconnection attempts
+            self.schedule_reconnect()
     
     def on_connect(self, client, userdata, flags, reason_code, properties):
         """Callback when connected to MQTT broker"""
@@ -79,6 +83,9 @@ class MQTTBridge:
             print(f"✓ Subscribing to topic: {MQTT_TOPIC}")
             client.subscribe(MQTT_TOPIC, qos=1)
             mqtt_connected = True
+            # Reset reconnection attempts on successful connection
+            self.reconnect_attempts = 0
+            self.is_reconnecting = False
             # Broadcast status to all connected clients
             if event_loop and active_connections:
                 asyncio.run_coroutine_threadsafe(
@@ -93,6 +100,8 @@ class MQTTBridge:
                     broadcast_status_update(),
                     event_loop
                 )
+            # Schedule reconnection attempt
+            self.schedule_reconnect()
     
     def on_disconnect(self, client, userdata, flags, reason_code, properties):
         """Callback when disconnected from MQTT broker"""
@@ -100,12 +109,63 @@ class MQTTBridge:
         mqtt_connected = False
         if reason_code != 0:
             print("⚠ Unexpected disconnection from MQTT broker")
+            # Schedule reconnection attempt on unexpected disconnect
+            self.schedule_reconnect()
         # Broadcast status to all connected clients
         if event_loop and active_connections:
             asyncio.run_coroutine_threadsafe(
                 broadcast_status_update(),
                 event_loop
             )
+    
+    def schedule_reconnect(self):
+        """Schedule a reconnection attempt"""
+        global reconnect_task
+        if self.is_reconnecting:
+            return  # Already attempting to reconnect
+        
+        self.is_reconnecting = True
+        if event_loop:
+            # Cancel existing reconnect task if any
+            if reconnect_task and not reconnect_task.done():
+                reconnect_task.cancel()
+            reconnect_task = asyncio.run_coroutine_threadsafe(
+                self.reconnect_loop(),
+                event_loop
+            )
+    
+    async def reconnect_loop(self):
+        """Attempt to reconnect to MQTT broker at intervals"""
+        while True:
+            # Check if we should stop trying
+            if MQTT_RECONNECT_MAX_ATTEMPTS > 0 and self.reconnect_attempts >= MQTT_RECONNECT_MAX_ATTEMPTS:
+                print(f"✗ Maximum reconnection attempts ({MQTT_RECONNECT_MAX_ATTEMPTS}) reached. Stopping reconnection attempts.")
+                self.is_reconnecting = False
+                break
+            
+            # Check if already connected
+            if mqtt_connected:
+                self.is_reconnecting = False
+                break
+            
+            self.reconnect_attempts += 1
+            print(f"⟳ Reconnection attempt {self.reconnect_attempts}/{MQTT_RECONNECT_MAX_ATTEMPTS if MQTT_RECONNECT_MAX_ATTEMPTS > 0 else '∞'} in {MQTT_RECONNECT_INTERVAL} seconds...")
+            await asyncio.sleep(MQTT_RECONNECT_INTERVAL)
+            
+            try:
+                print(f"⟳ Attempting to reconnect to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}...")
+                # Stop the current loop before reconnecting
+                self.mqtt_client.loop_stop()
+                # Try to disconnect cleanly first
+                try:
+                    self.mqtt_client.disconnect()
+                except:
+                    pass
+                # Create a fresh connection
+                self.mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+                self.mqtt_client.loop_start()
+            except Exception as e:
+                print(f"✗ Reconnection failed: {e}")
     
     def on_message(self, client, userdata, msg):
         """Callback when message is received from MQTT"""
@@ -140,7 +200,27 @@ class MQTTBridge:
 
                 return sanitized_channels or None
 
-            turbidity = coerce_float(data.get('turbidity'))
+            # Extract pH
+            pH = coerce_float(data.get('pH')) or coerce_float(data.get('ph'))
+            
+            # Extract turbidity - just pass through raw voltage or NTU, no conversion
+            turbidity_voltage = None
+            turbidity_ntu = None
+            
+            turbidity_container = data.get('turbidity_sensor') or data.get('turbiditySensor')
+            if isinstance(turbidity_container, dict):
+                turbidity_voltage = coerce_float(turbidity_container.get('voltage'))
+                turbidity_ntu = coerce_float(turbidity_container.get('ntu'))
+            
+            # Fallback to top-level fields
+            if turbidity_voltage is None:
+                turbidity_voltage = coerce_float(
+                    data.get('turbidity_voltage') or data.get('turbidityVoltage')
+                )
+            if turbidity_ntu is None:
+                turbidity_ntu = coerce_float(data.get('turbidity'))
+            
+            # Extract spectrum data
             spectrum_source: Optional[Dict[str, Any]] = None
             for key in ('spectrum', 'spectrum_sensor', 'spectrumSensor', 'spectral'):
                 candidate = data.get(key)
@@ -187,22 +267,26 @@ class MQTTBridge:
             if spectrum_average is None and channels:
                 spectrum_average = sum(channels.values()) / len(channels)
 
+            # Build sanitized payload
             sanitized: Dict[str, Any] = {
                 'timestamp': timestamp,
                 'location': data.get('location', 'unknown'),
-                'turbidity': turbidity,
             }
+            
+            if pH is not None:
+                sanitized['pH'] = pH
 
-            if sensor_type_value:
-                sanitized['sensor_type'] = sensor_type_value
-            if channels is not None:
-                sanitized['channels'] = channels
-            if spectrum_average is not None:
-                sanitized['spectrum_average'] = spectrum_average
-            if readings_count is not None:
-                sanitized['readings_count'] = readings_count
+            # Add turbidity object if we have any turbidity data
+            if turbidity_voltage is not None or turbidity_ntu is not None:
+                turbidity_payload: Dict[str, Any] = {}
+                if turbidity_voltage is not None:
+                    turbidity_payload['voltage'] = turbidity_voltage
+                if turbidity_ntu is not None:
+                    turbidity_payload['ntu'] = turbidity_ntu
+                sanitized['turbidity'] = turbidity_payload
 
-            if any((sensor_type_value, channels, spectrum_average, readings_count is not None, spectrum_source)):
+            # Add spectrum data if available
+            if any((sensor_type_value, channels, spectrum_average, readings_count is not None)):
                 spectrum_payload: Dict[str, Any] = {}
                 if sensor_type_value:
                     spectrum_payload['sensor_type'] = sensor_type_value
@@ -214,10 +298,13 @@ class MQTTBridge:
                     spectrum_payload['readings_count'] = readings_count
                 sanitized['spectrum'] = spectrum_payload
 
+            # Check if we have meaningful metrics
             has_metrics = any(
                 value is not None
                 for value in (
-                    sanitized.get('turbidity'),
+                    turbidity_voltage,
+                    turbidity_ntu,
+                    pH,
                     spectrum_average,
                     channels,
                 )
@@ -225,8 +312,10 @@ class MQTTBridge:
 
             if has_metrics:
                 display_parts = []
-                if turbidity is not None:
-                    display_parts.append(f"Turbidity={turbidity:.2f}")
+                if turbidity_voltage is not None:
+                    display_parts.append(f"Turbidity(V)={turbidity_voltage:.3f}")
+                if turbidity_ntu is not None:
+                    display_parts.append(f"Turbidity(NTU)={turbidity_ntu:.2f}")
                 if spectrum_average is not None:
                     display_parts.append(f"SpectralAvg={spectrum_average:.2f}")
                 if channels:
@@ -238,9 +327,8 @@ class MQTTBridge:
                 )
             else:
                 print(
-                    f"[{datetime.now().strftime('%H:%M:%S')}] Received payload with insufficient data: {sanitized}"
+                    f"[{datetime.now().strftime('%H:%M:%S')}] Received payload with insufficient data"
                 )
-                print(payload)
 
             message_history.append(sanitized)
             latest_message = sanitized
@@ -259,6 +347,40 @@ class MQTTBridge:
 
 # Initialize MQTT bridge
 mqtt_bridge = MQTTBridge()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    global event_loop, reconnect_task
+    
+    # Startup
+    event_loop = asyncio.get_event_loop()
+    print("Event loop initialized for MQTT bridge")
+    
+    yield
+    
+    # Shutdown
+    if reconnect_task and not reconnect_task.done():
+        reconnect_task.cancel()
+    if mqtt_bridge.mqtt_client:
+        mqtt_bridge.mqtt_client.loop_stop()
+        mqtt_bridge.mqtt_client.disconnect()
+    print("Shutting down...")
+
+# Create FastAPI app with lifespan
+app = FastAPI(
+    title="Water Quality WebSocket Bridge",
+    lifespan=lifespan
+)
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your dashboard URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 async def broadcast_status_update():
     """Broadcast MQTT connection status to all WebSocket clients"""
@@ -290,6 +412,9 @@ async def root():
         "service": "Water Quality WebSocket Bridge",
         "mqtt_broker": f"{MQTT_BROKER}:{MQTT_PORT}",
         "mqtt_topic": MQTT_TOPIC,
+        "mqtt_connected": mqtt_connected,
+        "reconnect_attempts": mqtt_bridge.reconnect_attempts,
+        "is_reconnecting": mqtt_bridge.is_reconnecting,
         "active_connections": len(active_connections),
         "history_size": len(message_history),
         "history_limit": HISTORY_LIMIT,
@@ -347,27 +472,14 @@ async def websocket_endpoint(websocket: WebSocket):
         active_connections.discard(websocket)
         print(f"✗ WebSocket client disconnected. Total: {len(active_connections)}")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    if mqtt_bridge.mqtt_client:
-        mqtt_bridge.mqtt_client.loop_stop()
-        mqtt_bridge.mqtt_client.disconnect()
-    print("Shutting down...")
-
-@app.on_event("startup")
-async def startup_event():
-    """Set event loop reference on startup"""
-    global event_loop
-    event_loop = asyncio.get_event_loop()
-    print("Event loop initialized for MQTT bridge")
-
 if __name__ == "__main__":
     print("=" * 60)
     print("Water Quality WebSocket Bridge Server")
     print("=" * 60)
     print(f"MQTT Broker: {MQTT_BROKER}:{MQTT_PORT}")
     print(f"MQTT Topic: {MQTT_TOPIC}")
+    print(f"Reconnect Interval: {MQTT_RECONNECT_INTERVAL}s")
+    print(f"Max Reconnect Attempts: {MQTT_RECONNECT_MAX_ATTEMPTS if MQTT_RECONNECT_MAX_ATTEMPTS > 0 else 'Infinite'}")
     print(f"WebSocket URL: ws://localhost:8000/ws")
     print("=" * 60)
     print()

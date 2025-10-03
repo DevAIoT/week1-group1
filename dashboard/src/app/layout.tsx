@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Water Quality Monitor",
+  title: "AquaAware",
   description: "Real-time water quality monitoring dashboard",
 };
 
