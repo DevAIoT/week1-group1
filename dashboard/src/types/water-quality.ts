@@ -1,8 +1,15 @@
+export interface SpectrumReading {
+  sensorType?: string;
+  channels: Record<string, number>;
+  average?: number | null;
+  readingsCount?: number | null;
+}
+
 export interface WaterQualityData {
   timestamp: string;
-  turbidity: number;
-  light_intensity: number;
   location: string;
+  turbidity?: number | null;
+  spectrum?: SpectrumReading | null;
 }
 
 export interface WaterQualityStatus {
@@ -13,6 +20,6 @@ export interface WaterQualityStatus {
 
 export interface HistoricalDataPoint {
   time: string;
-  turbidity: number;
-  lightIntensity: number;
+  turbidity: number | null;
+  spectrumAverage?: number | null;
 }

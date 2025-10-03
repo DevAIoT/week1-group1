@@ -7,7 +7,7 @@ Real-time water quality monitoring with IoT sensors and live dashboard visualiza
 ```
 Arduino (Turbidity) → Raspberry Pi (Publisher) → MQTT Broker (192.168.1.103:1883)
                             ↓                            ↓
-                    Light Sensor (on Pi)        WebSocket Bridge Server
+            AS7265X Spectral Sensor (on Pi)    WebSocket Bridge Server
                                                          ↓
                                                   Next.js Dashboard
                                                   (Live Visualization)
@@ -16,7 +16,7 @@ Arduino (Turbidity) → Raspberry Pi (Publisher) → MQTT Broker (192.168.1.103:
 ## Components
 
 1. **Arduino**: Reads turbidity sensor, sends data to Pi via serial
-2. **Raspberry Pi**: Reads Arduino data + light sensor, publishes to MQTT broker
+2. **Raspberry Pi**: Reads Arduino data + spectral sensor, publishes to MQTT broker
 3. **MQTT Broker**: Central message broker at `192.168.1.103:1883`
 4. **WebSocket Bridge**: Python FastAPI server that bridges MQTT to WebSocket
 5. **Dashboard**: Next.js web application with real-time data visualization
@@ -30,7 +30,7 @@ Arduino (Turbidity) → Raspberry Pi (Publisher) → MQTT Broker (192.168.1.103:
 - Python 3.8+ with pip
 - Node.js 18+ with npm
 - Arduino with turbidity sensor
-- Raspberry Pi with light sensor
+- Raspberry Pi with spectral sensor module
 
 ### 1. Setup WebSocket Bridge Server
 
@@ -115,9 +115,21 @@ You should see messages like:
 ```json
 {
   "timestamp": "2025-10-02T10:30:00",
+  "location": "raspberry_pi_1",
   "turbidity": 2.5,
-  "light_intensity": 450.0,
-  "location": "raspberry_pi_1"
+  "spectrum": {
+    "sensor_type": "AS7265X_Spectral",
+    "channels": {
+      "A": 174.2,
+      "B": 240.1,
+      "C": 20.7,
+      "D": 392.0,
+      "E": 82.3,
+      "F": 37.5
+    },
+    "average": 157.8,
+    "readings_count": 6
+  }
 }
 ```
 
@@ -177,7 +189,7 @@ export MQTT_CLIENT_ID=websocket_bridge
 - **Water Quality Status**: Overall quality score with color-coded indicators
 - **Metrics Display**: 
   - Turbidity levels (NTU)
-  - Light transmission intensity
+  - Spectral intensity averages and channel breakdowns
 - **Historical Trends**: Line chart showing last 20 readings
 - **Alert System**: Visual alerts for water quality issues
 - **Connection Status**: Shows WebSocket connection state
@@ -188,8 +200,9 @@ export MQTT_CLIENT_ID=websocket_bridge
   - Clean: < 1 NTU
   - Slightly turbid: 1-5 NTU
   - Dirty: > 5 NTU
-- **Light Intensity**:
-  - Normal range: 50-800 units
+- **Spectral Intensity**:
+  - Normal range (average): 50-800 units
+  - Individual channels outside 20-1000 units trigger warnings
 
 ---
 
@@ -306,9 +319,21 @@ WebSocket endpoint for real-time data streaming. Messages are in JSON format:
 ```json
 {
   "timestamp": "2025-10-02T10:30:00",
+  "location": "raspberry_pi_1",
   "turbidity": 2.5,
-  "light_intensity": 450.0,
-  "location": "raspberry_pi_1"
+  "spectrum": {
+    "sensor_type": "AS7265X_Spectral",
+    "channels": {
+      "A": 174.2,
+      "B": 240.1,
+      "C": 20.7,
+      "D": 392.0,
+      "E": 82.3,
+      "F": 37.5
+    },
+    "average": 157.8,
+    "readings_count": 6
+  }
 }
 ```
 
@@ -317,7 +342,7 @@ WebSocket endpoint for real-time data streaming. Messages are in JSON format:
 ## Data Flow
 
 1. **Arduino** → Reads turbidity sensor → Sends JSON via serial (5s intervals)
-2. **Raspberry Pi** → Reads serial + light sensor → Publishes to MQTT (10s intervals)
+2. **Raspberry Pi** → Reads serial + spectral sensor → Publishes to MQTT (10s intervals)
 3. **MQTT Broker** → Receives messages on `group1/water_quality` topic
 4. **WebSocket Bridge** → Subscribes to MQTT → Broadcasts to WebSocket clients
 5. **Dashboard** → Connects via WebSocket → Displays real-time data & analysis
@@ -341,7 +366,7 @@ WebSocket endpoint for real-time data streaming. Messages are in JSON format:
 
 ### Hardware
 - Arduino (turbidity sensor)
-- Raspberry Pi (light sensor + serial reader)
+- Raspberry Pi (spectral sensor + serial reader)
 - MQTT Broker (Mosquitto)
 
 ---

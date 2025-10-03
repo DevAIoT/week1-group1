@@ -96,25 +96,126 @@ class MQTTBridge:
                 except (TypeError, ValueError):
                     return None
 
+            def coerce_int(value: Any) -> Optional[int]:
+                try:
+                    integer = int(value)
+                    return integer
+                except (TypeError, ValueError):
+                    return None
+
+            def sanitize_channels(raw: Any) -> Optional[Dict[str, float]]:
+                if not isinstance(raw, dict):
+                    return None
+
+                sanitized_channels: Dict[str, float] = {}
+                for key, value in raw.items():
+                    numeric_value = coerce_float(value)
+                    if numeric_value is not None:
+                        sanitized_channels[str(key)] = numeric_value
+
+                return sanitized_channels or None
+
             turbidity = coerce_float(data.get('turbidity'))
-            light_intensity = coerce_float(data.get('light_intensity'))
+            spectrum_source: Optional[Dict[str, Any]] = None
+            for key in ('spectrum', 'spectrum_sensor', 'spectrumSensor', 'spectral'):
+                candidate = data.get(key)
+                if isinstance(candidate, dict):
+                    spectrum_source = candidate
+                    break
+
+            channels = sanitize_channels(
+                data.get('channels')
+                if data.get('channels') is not None
+                else (spectrum_source.get('channels') if spectrum_source else None)
+            )
+
+            spectrum_average = coerce_float(
+                data.get('spectrum_average')
+                if data.get('spectrum_average') is not None
+                else data.get('spectrumAverage')
+            )
+            if spectrum_average is None and spectrum_source:
+                for avg_key in ('average', 'avg', 'mean'):
+                    spectrum_average = coerce_float(spectrum_source.get(avg_key))
+                    if spectrum_average is not None:
+                        break
+
+            readings_count = coerce_int(
+                data.get('readings_count')
+                if data.get('readings_count') is not None
+                else data.get('readingsCount')
+            )
+            if readings_count is None and spectrum_source:
+                for count_key in ('readings_count', 'readingsCount', 'count', 'samples'):
+                    readings_count = coerce_int(spectrum_source.get(count_key))
+                    if readings_count is not None:
+                        break
+
+            sensor_type_value = data.get('sensor_type') or data.get('sensorType')
+            if not sensor_type_value and spectrum_source:
+                for type_key in ('sensor_type', 'sensorType', 'name', 'type'):
+                    value = spectrum_source.get(type_key)
+                    if isinstance(value, str):
+                        sensor_type_value = value
+                        break
+
+            if spectrum_average is None and channels:
+                spectrum_average = sum(channels.values()) / len(channels)
 
             sanitized: Dict[str, Any] = {
                 'timestamp': timestamp,
+                'location': data.get('location', 'unknown'),
                 'turbidity': turbidity,
-                'light_intensity': light_intensity,
-                'location': data.get('location'),
             }
 
-            if turbidity is not None and light_intensity is not None:
+            if sensor_type_value:
+                sanitized['sensor_type'] = sensor_type_value
+            if channels is not None:
+                sanitized['channels'] = channels
+            if spectrum_average is not None:
+                sanitized['spectrum_average'] = spectrum_average
+            if readings_count is not None:
+                sanitized['readings_count'] = readings_count
+
+            if any((sensor_type_value, channels, spectrum_average, readings_count is not None, spectrum_source)):
+                spectrum_payload: Dict[str, Any] = {}
+                if sensor_type_value:
+                    spectrum_payload['sensor_type'] = sensor_type_value
+                if channels is not None:
+                    spectrum_payload['channels'] = channels
+                if spectrum_average is not None:
+                    spectrum_payload['average'] = spectrum_average
+                if readings_count is not None:
+                    spectrum_payload['readings_count'] = readings_count
+                sanitized['spectrum'] = spectrum_payload
+
+            has_metrics = any(
+                value is not None
+                for value in (
+                    sanitized.get('turbidity'),
+                    spectrum_average,
+                    channels,
+                )
+            )
+
+            if has_metrics:
+                display_parts = []
+                if turbidity is not None:
+                    display_parts.append(f"Turbidity={turbidity:.2f}")
+                if spectrum_average is not None:
+                    display_parts.append(f"SpectralAvg={spectrum_average:.2f}")
+                if channels:
+                    display_parts.append(f"Channels={len(channels)}")
+
                 print(
                     f"[{datetime.now().strftime('%H:%M:%S')}] Received: "
-                    f"Turbidity={turbidity:.2f}, Light={light_intensity:.2f}"
+                    + ', '.join(display_parts)
                 )
             else:
                 print(
-                    f"[{datetime.now().strftime('%H:%M:%S')}] Received payload with missing values: {sanitized}"
+                    f"[{datetime.now().strftime('%H:%M:%S')}] Received payload with insufficient data: {sanitized}"
                 )
+                print(payload)
 
             message_history.append(sanitized)
             latest_message = sanitized

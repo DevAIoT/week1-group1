@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 import time
 import sys
+import random
 
 # MQTT Configuration (same as computeNode.py)
 MQTT_BROKER = "192.168.1.103"
@@ -38,10 +39,19 @@ class SensorSimulator:
     
     def send_good_payload(self):
         """Send a payload with good water quality"""
+        # Good water: low turbidity (0.5-4.5 NTU) correlates with high light transmission (400-750)
+        turbidity = round(random.uniform(0.5, 4.5), 2)
+        # Lower turbidity = clearer water = higher light transmission
+        # Map turbidity inversely to light intensity
+        base_light = 750 - (turbidity / 4.5) * 350  # 750 for clearest, 400 for slightly turbid
+        light_intensity = round(base_light + random.uniform(-50, 50), 1)
+        # Clamp to valid range
+        light_intensity = max(400, min(750, light_intensity))
+        
         payload = {
             "timestamp": datetime.now().isoformat(),
-            "turbidity": 2.5,  # Below threshold (5.0)
-            "light_intensity": 300.0,  # Within range (50-800)
+            "turbidity": turbidity,
+            "light_intensity": light_intensity,
             "location": "test_simulator"
         }
         
@@ -58,10 +68,19 @@ class SensorSimulator:
     
     def send_bad_payload(self):
         """Send a payload with poor water quality (triggers alert)"""
+        # Bad water: high turbidity (6.0-20.0 NTU) correlates with low light transmission (20-200)
+        turbidity = round(random.uniform(6.0, 20.0), 2)
+        # Higher turbidity = murkier water = lower light transmission
+        # Map turbidity inversely to light intensity
+        base_light = 200 - (turbidity - 6.0) / 14.0 * 180  # 200 for moderately bad, 20 for very bad
+        light_intensity = round(base_light + random.uniform(-10, 10), 1)
+        # Clamp to valid range
+        light_intensity = max(20, min(200, light_intensity))
+        
         payload = {
             "timestamp": datetime.now().isoformat(),
-            "turbidity": 12.5,  # Above threshold (5.0) - severely turbid
-            "light_intensity": 35.0,  # Below minimum (50) - low light transmission
+            "turbidity": turbidity,
+            "light_intensity": light_intensity,
             "location": "test_simulator"
         }
         
@@ -78,10 +97,18 @@ class SensorSimulator:
     
     def send_moderately_bad_payload(self):
         """Send a payload with moderately bad water quality"""
+        # Moderately bad: turbidity just above threshold (5.0-8.0 NTU)
+        turbidity = round(random.uniform(5.0, 8.0), 2)
+        # Moderate turbidity = moderate light transmission (250-400)
+        base_light = 400 - (turbidity - 5.0) / 3.0 * 150  # 400 for barely bad, 250 for moderately bad
+        light_intensity = round(base_light + random.uniform(-30, 30), 1)
+        # Clamp to valid range
+        light_intensity = max(250, min(400, light_intensity))
+        
         payload = {
             "timestamp": datetime.now().isoformat(),
-            "turbidity": 7.2,  # Above threshold but not severe
-            "light_intensity": 150.0,  # Within acceptable range
+            "turbidity": turbidity,
+            "light_intensity": light_intensity,
             "location": "test_simulator"
         }
         
